@@ -222,18 +222,50 @@ def build_chunks(sections: pd.DataFrame, max_words: int = 220, overlap_words: in
 # 3. Embeddings and retrieval
 # ---------------------------------------------------------------------------
 
-def make_databricks_embedder(endpoint: str, batch_size: int = 16) -> EmbedFn:
-    """Embeddings from a Databricks Foundation Model API endpoint."""
+def _is_retryable(exc: Exception) -> bool:
+    msg = str(exc).upper()
+    return any(code in msg for code in ("429", "RATE", "TOO MANY", "503", "TIMEOUT", "TEMPORARILY"))
+
+
+def make_databricks_embedder(endpoint: str, batch_size: int = 32, max_workers: int = 4,
+                             max_retries: int = 5, progress: bool = False) -> EmbedFn:
+    """Embeddings from a Databricks Foundation Model API endpoint.
+
+    Sends batches in parallel (max_workers) and retries with exponential backoff when the
+    endpoint is rate-limited, which matters on Free Edition quotas.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from mlflow.deployments import get_deploy_client
 
     client = get_deploy_client("databricks")
 
+    def call(batch: list[str]) -> list[list[float]]:
+        for attempt in range(max_retries):
+            try:
+                resp = client.predict(endpoint=endpoint, inputs={"input": batch})
+                return [item["embedding"] for item in resp["data"]]
+            except Exception as exc:
+                if attempt == max_retries - 1 or not _is_retryable(exc):
+                    raise
+                time.sleep(2 ** attempt)  # 1, 2, 4, 8 s
+        return []
+
     def embed(texts: Sequence[str]) -> np.ndarray:
-        vectors = []
-        for i in range(0, len(texts), batch_size):
-            resp = client.predict(endpoint=endpoint, inputs={"input": list(texts[i:i + batch_size])})
-            vectors.extend(item["embedding"] for item in resp["data"])
-        return np.asarray(vectors, dtype=np.float32)
+        batches = [list(texts[i:i + batch_size]) for i in range(0, len(texts), batch_size)]
+        if len(batches) == 1:
+            return np.asarray(call(batches[0]), dtype=np.float32)
+
+        results: list[list[list[float]] | None] = [None] * len(batches)
+        start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(call, b): i for i, b in enumerate(batches)}
+            for done, future in enumerate(as_completed(futures), start=1):
+                results[futures[future]] = future.result()
+                if progress and (done % 10 == 0 or done == len(batches)):
+                    print(f"  {done}/{len(batches)} batches embedded "
+                          f"({time.perf_counter() - start:.0f}s)", flush=True)
+        return np.asarray([vec for batch in results for vec in batch], dtype=np.float32)
 
     return embed
 

@@ -39,7 +39,14 @@ print(f"{len(chunks_pdf)} chunks to embed with {cfg.EMBEDDING_ENDPOINT}")
 
 import time
 
-embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=16)
+embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=32, max_workers=4, progress=True)
+
+# Quick check first: one small call, so a missing endpoint fails fast instead of after minutes.
+start = time.perf_counter()
+test_vec = embed(chunks_pdf["embed_text"].head(2).tolist())
+print(f"Endpoint OK: one call took {time.perf_counter() - start:.1f}s, dim={test_vec.shape[1]}")
+n_batches = -(-len(chunks_pdf) // 32)
+print(f"Embedding {len(chunks_pdf)} chunks in {n_batches} batches (4 in parallel)...")
 
 start = time.perf_counter()
 vectors = embed(chunks_pdf["embed_text"].tolist())

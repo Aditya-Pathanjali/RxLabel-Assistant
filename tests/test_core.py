@@ -61,7 +61,29 @@ def test_databricks_factories_parse_responses(monkeypatch):
     monkeypatch.setitem(sys.modules, "mlflow.deployments", fake)
 
     assert core.make_databricks_embedder("e", batch_size=2)(["a", "b", "c"]).shape == (3, 2)
+    assert core.make_databricks_embedder("e", batch_size=3, max_workers=3)([str(i) for i in range(10)]).shape == (10, 2)
     assert core.make_databricks_chat("c")([{"role": "user", "content": "hi"}]) == "Answer [1]"
+
+
+def test_embedder_keeps_order_and_retries_rate_limits(monkeypatch):
+    calls = {"n": 0}
+
+    class FlakyClient:
+        def predict(self, endpoint, inputs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("429 Too Many Requests")
+            return {"data": [{"embedding": [float(t), 0.0]} for t in inputs["input"]]}
+
+    fake = types.ModuleType("mlflow.deployments")
+    fake.get_deploy_client = lambda target: FlakyClient()
+    monkeypatch.setitem(sys.modules, "mlflow", types.ModuleType("mlflow"))
+    monkeypatch.setitem(sys.modules, "mlflow.deployments", fake)
+    monkeypatch.setattr(core.time, "sleep", lambda s: None)
+
+    vecs = core.make_databricks_embedder("e", batch_size=4, max_workers=1)([str(i) for i in range(10)])
+    assert vecs[:, 0].tolist() == list(range(10))  # order preserved across batches
+    assert calls["n"] == 4  # 3 batches + 1 retry
 
 
 def test_judge_parses_json_and_survives_garbage():
