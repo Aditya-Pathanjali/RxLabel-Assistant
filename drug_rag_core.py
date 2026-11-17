@@ -224,15 +224,17 @@ def build_chunks(sections: pd.DataFrame, max_words: int = 220, overlap_words: in
 
 def _is_retryable(exc: Exception) -> bool:
     msg = str(exc).upper()
-    return any(code in msg for code in ("429", "RATE", "TOO MANY", "503", "TIMEOUT", "TEMPORARILY"))
+    return any(code in msg for code in
+               ("429", "RATE", "TOO MANY", "503", "TIMEOUT", "TIMED OUT", "TEMPORARILY", "MAX RETRIES"))
 
 
 def make_databricks_embedder(endpoint: str, batch_size: int = 32, max_workers: int = 4,
-                             max_retries: int = 5, progress: bool = False) -> EmbedFn:
+                             max_retries: int = 5, progress: bool = False, verbose: bool = False) -> EmbedFn:
     """Embeddings from a Databricks Foundation Model API endpoint.
 
     Sends batches in parallel (max_workers) and retries with exponential backoff when the
-    endpoint is rate-limited, which matters on Free Edition quotas.
+    endpoint is rate-limited, which matters on Free Edition quotas. verbose=True prints
+    each rate-limit wait so a slow run is visibly waiting rather than looking stuck.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -248,7 +250,10 @@ def make_databricks_embedder(endpoint: str, batch_size: int = 32, max_workers: i
             except Exception as exc:
                 if attempt == max_retries - 1 or not _is_retryable(exc):
                     raise
-                time.sleep(2 ** attempt)  # 1, 2, 4, 8 s
+                wait = min(60, 5 * 2 ** attempt)  # 5, 10, 20, 40, 60 s
+                if verbose:
+                    print(f"    endpoint busy/rate-limited ({str(exc)[:80]}...), retrying in {wait}s", flush=True)
+                time.sleep(wait)
         return []
 
     def embed(texts: Sequence[str]) -> np.ndarray:

@@ -23,6 +23,11 @@ dbutils.library.restartPython()
 import os
 import sys
 
+# Fail fast instead of MLflow silently retrying a rate-limited request for minutes;
+# our own retry loop (which prints what it is doing) handles rate limits instead.
+os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "0"
+os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "60"
+
 sys.path.append(os.getcwd())
 
 import config as cfg
@@ -33,33 +38,55 @@ print(f"{len(chunks_pdf)} chunks to embed with {cfg.EMBEDDING_ENDPOINT}")
 
 # COMMAND ----------
 
-# MAGIC %md ## 1 · Embed the chunks
+# MAGIC %md
+# MAGIC ## 1 · Embed the chunks (resumable)
+# MAGIC
+# MAGIC Free Edition rate-limits model endpoints, so chunks are embedded in groups and each group is
+# MAGIC **appended to the Delta table as soon as it is done**. If the cell is interrupted or times
+# MAGIC out, just run it again: chunks that already have an embedding are skipped.
+# MAGIC Set `RESTART = True` to rebuild the table from scratch.
 
 # COMMAND ----------
 
 import time
 
-embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=32, max_workers=4, progress=True)
+RESTART = False
+BATCH_SIZE = 32
+GROUP_SIZE = BATCH_SIZE * 4  # chunks saved per write
 
-# Quick check first: one small call, so a missing endpoint fails fast instead of after minutes.
-start = time.perf_counter()
-test_vec = embed(chunks_pdf["embed_text"].head(2).tolist())
-print(f"Endpoint OK: one call took {time.perf_counter() - start:.1f}s, dim={test_vec.shape[1]}")
-n_batches = -(-len(chunks_pdf) // 32)
-print(f"Embedding {len(chunks_pdf)} chunks in {n_batches} batches (4 in parallel)...")
+embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=BATCH_SIZE, max_workers=2,
+                                      max_retries=6, verbose=True)
 
-start = time.perf_counter()
-vectors = embed(chunks_pdf["embed_text"].tolist())
-print(f"Embedded {len(vectors)} chunks, dim={vectors.shape[1]}, in {time.perf_counter() - start:.0f}s")
+# Quick check: one small call, so a wrong endpoint name fails in seconds.
+t0 = time.perf_counter()
+dim = embed(chunks_pdf["embed_text"].head(2).tolist()).shape[1]
+print(f"Endpoint OK: one call took {time.perf_counter() - t0:.1f}s, dim={dim}")
 
-embeddings_pdf = chunks_pdf.copy()
-embeddings_pdf["embedding"] = [v.tolist() for v in vectors]
-embeddings_pdf["embedding_model"] = cfg.EMBEDDING_ENDPOINT
+if RESTART:
+    spark.sql(f"DROP TABLE IF EXISTS {cfg.EMBEDDINGS_TABLE}")
+done_ids = set()
+if spark.catalog.tableExists(cfg.EMBEDDINGS_TABLE):
+    done_ids = {r.chunk_id for r in spark.table(cfg.EMBEDDINGS_TABLE).select("chunk_id").collect()}
+todo = chunks_pdf[~chunks_pdf["chunk_id"].isin(done_ids)].reset_index(drop=True)
+print(f"{len(done_ids)} chunks already embedded, {len(todo)} to go")
 
-(spark.createDataFrame(embeddings_pdf)
-    .write.mode("overwrite").option("overwriteSchema", "true")
-    .option("delta.enableChangeDataFeed", "true")  # required for a Delta Sync index
-    .saveAsTable(cfg.EMBEDDINGS_TABLE))
+t0 = time.perf_counter()
+for start in range(0, len(todo), GROUP_SIZE):
+    group = todo.iloc[start:start + GROUP_SIZE].copy()
+    group["embedding"] = [v.tolist() for v in embed(group["embed_text"].tolist())]
+    group["embedding_model"] = cfg.EMBEDDING_ENDPOINT
+    (spark.createDataFrame(group)
+        .write.mode("append")
+        .option("delta.enableChangeDataFeed", "true")  # required for a Delta Sync index
+        .saveAsTable(cfg.EMBEDDINGS_TABLE))
+    done = start + len(group)
+    rate = done / max(time.perf_counter() - t0, 1e-6)
+    print(f"  saved {len(done_ids) + done}/{len(chunks_pdf)} chunks "
+          f"({time.perf_counter() - t0:.0f}s elapsed, ~{(len(todo) - done) / rate / 60:.1f} min left)",
+          flush=True)
+
+total = spark.table(cfg.EMBEDDINGS_TABLE).count()
+print(f"Done: {total}/{len(chunks_pdf)} chunks embedded, dim={dim}")
 
 # COMMAND ----------
 
@@ -85,7 +112,7 @@ if cfg.USE_VECTOR_SEARCH:
             source_table_name=cfg.EMBEDDINGS_TABLE,
             pipeline_type="TRIGGERED",
             primary_key="chunk_id",
-            embedding_dimension=int(vectors.shape[1]),
+            embedding_dimension=int(dim),
             embedding_vector_column="embedding",
         )
     print("Vector Search index ready:", cfg.VECTOR_INDEX)
