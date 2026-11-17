@@ -229,7 +229,8 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 def make_databricks_embedder(endpoint: str, batch_size: int = 32, max_workers: int = 4,
-                             max_retries: int = 5, progress: bool = False, verbose: bool = False) -> EmbedFn:
+                             max_retries: int = 5, progress: bool = False, verbose: bool = False,
+                             request_timeout_s: float | None = None) -> EmbedFn:
     """Embeddings from a Databricks Foundation Model API endpoint.
 
     Sends batches in parallel (max_workers) and retries with exponential backoff when the
@@ -237,15 +238,29 @@ def make_databricks_embedder(endpoint: str, batch_size: int = 32, max_workers: i
     each rate-limit wait so a slow run is visibly waiting rather than looking stuck.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import TimeoutError as FutureTimeout
 
     from mlflow.deployments import get_deploy_client
 
     client = get_deploy_client("databricks")
 
+    def predict(batch: list[str]) -> dict:
+        if request_timeout_s is None:
+            return client.predict(endpoint=endpoint, inputs={"input": batch})
+        # Hard client-side timeout: a hung request is abandoned and retried.
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            return pool.submit(client.predict, endpoint=endpoint, inputs={"input": batch}).result(
+                timeout=request_timeout_s)
+        except FutureTimeout:
+            raise RuntimeError(f"Request timed out after {request_timeout_s:.0f}s") from None
+        finally:
+            pool.shutdown(wait=False)
+
     def call(batch: list[str]) -> list[list[float]]:
         for attempt in range(max_retries):
             try:
-                resp = client.predict(endpoint=endpoint, inputs={"input": batch})
+                resp = predict(batch)
                 return [item["embedding"] for item in resp["data"]]
             except Exception as exc:
                 if attempt == max_retries - 1 or not _is_retryable(exc):

@@ -32,7 +32,8 @@ def load_components(spark, embedding_mode: str = "auto", use_vector_search: bool
     mode, embed, retriever = "tfidf", None, None
     if embedding_mode in ("auto", "gte") and spark.catalog.tableExists(cfg.EMBEDDINGS_TABLE):
         print(f"Checking embedding endpoint {cfg.EMBEDDING_ENDPOINT} ...")
-        gte = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT)
+        gte = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=8, max_workers=1,
+                                            request_timeout_s=60)
         if _endpoint_works(gte, ["test"]):
             mode, embed = "gte", gte
             if use_vs:

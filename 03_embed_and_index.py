@@ -23,10 +23,13 @@ dbutils.library.restartPython()
 import os
 import sys
 
-# Fail fast instead of MLflow silently retrying a rate-limited request for minutes;
-# our own retry loop (which prints what it is doing) handles rate limits instead.
+# Free Edition endpoints can hang on large requests. Cap MLflow's per-request and total
+# timeouts (default total is 10 minutes) and turn off its silent retries: our own retry
+# loop prints every wait.
 os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "0"
 os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "60"
+os.environ["MLFLOW_DEPLOYMENT_PREDICT_TIMEOUT"] = "60"
+os.environ["MLFLOW_DEPLOYMENT_PREDICT_TOTAL_TIMEOUT"] = "90"
 
 sys.path.append(os.getcwd())
 
@@ -41,26 +44,60 @@ print(f"{len(chunks_pdf)} chunks to embed with {cfg.EMBEDDING_ENDPOINT}")
 # MAGIC %md
 # MAGIC ## 1 · Embed the chunks (resumable)
 # MAGIC
-# MAGIC Free Edition rate-limits model endpoints, so chunks are embedded in groups and each group is
-# MAGIC **appended to the Delta table as soon as it is done**. If the cell is interrupted or times
-# MAGIC out, just run it again: chunks that already have an embedding are skipped.
-# MAGIC Set `RESTART = True` to rebuild the table from scratch.
+# MAGIC Two ways to call the embedding model, chosen automatically:
+# MAGIC * **`ai_query`** (Databricks AI Functions): batch inference in SQL, where Databricks handles
+# MAGIC   batching and throttling. Preferred.
+# MAGIC * **`api`**: small requests (8 chunks) sent one at a time from Python, with timeouts and retries.
+# MAGIC
+# MAGIC Chunks are embedded in groups and each group is **appended to the Delta table as soon as it is
+# MAGIC done**. If the cell is interrupted or times out, run it again: finished chunks are skipped.
+# MAGIC Set `EMBED_METHOD = "api"` to skip `ai_query`, or `RESTART = True` to rebuild from scratch.
 
 # COMMAND ----------
 
 import time
 
 RESTART = False
-BATCH_SIZE = 32
-GROUP_SIZE = BATCH_SIZE * 4  # chunks saved per write
+EMBED_METHOD = "auto"  # "auto" | "ai_query" | "api"
 
-embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=BATCH_SIZE, max_workers=2,
-                                      max_retries=6, verbose=True)
+api_embed = core.make_databricks_embedder(cfg.EMBEDDING_ENDPOINT, batch_size=8, max_workers=1,
+                                          max_retries=6, request_timeout_s=90, verbose=True)
 
-# Quick check: one small call, so a wrong endpoint name fails in seconds.
-t0 = time.perf_counter()
-dim = embed(chunks_pdf["embed_text"].head(2).tolist()).shape[1]
-print(f"Endpoint OK: one call took {time.perf_counter() - t0:.1f}s, dim={dim}")
+
+def embed_with_ai_query(texts: list[str]) -> list[list[float]]:
+    """Batch inference through the ai_query SQL function; returns vectors in input order."""
+    sdf = spark.createDataFrame([(i, t) for i, t in enumerate(texts)], "row_id INT, embed_text STRING")
+    sdf.createOrReplaceTempView("rxlabel_to_embed")
+    rows = spark.sql(f"""
+        SELECT row_id, ai_query('{cfg.EMBEDDING_ENDPOINT}', embed_text) AS embedding
+        FROM rxlabel_to_embed
+    """).collect()
+    by_id = {r.row_id: list(r.embedding) for r in rows}
+    return [by_id[i] for i in range(len(texts))]
+
+
+def embed_with_api(texts: list[str]) -> list[list[float]]:
+    return api_embed(texts).tolist()
+
+
+# Pick the method with a small probe (4 chunks), so problems show up in seconds.
+probe = chunks_pdf["embed_text"].head(4).tolist()
+embed_fn, dim = None, None
+for method, fn in [("ai_query", embed_with_ai_query), ("api", embed_with_api)]:
+    if EMBED_METHOD not in ("auto", method):
+        continue
+    t0 = time.perf_counter()
+    try:
+        dim = len(fn(probe)[0])
+        embed_fn = fn
+        print(f"Using {method}: probe of {len(probe)} chunks took {time.perf_counter() - t0:.1f}s, dim={dim}")
+        break
+    except Exception as exc:
+        print(f"{method} not usable ({type(exc).__name__}: {str(exc)[:150]})")
+if embed_fn is None:
+    raise RuntimeError("No embedding method worked: skip this notebook; 04/05 will use TF-IDF.")
+
+GROUP_SIZE = 256 if embed_fn is embed_with_ai_query else 64  # chunks saved per write
 
 if RESTART:
     spark.sql(f"DROP TABLE IF EXISTS {cfg.EMBEDDINGS_TABLE}")
@@ -73,7 +110,7 @@ print(f"{len(done_ids)} chunks already embedded, {len(todo)} to go")
 t0 = time.perf_counter()
 for start in range(0, len(todo), GROUP_SIZE):
     group = todo.iloc[start:start + GROUP_SIZE].copy()
-    group["embedding"] = [v.tolist() for v in embed(group["embed_text"].tolist())]
+    group["embedding"] = embed_fn(group["embed_text"].tolist())
     group["embedding_model"] = cfg.EMBEDDING_ENDPOINT
     (spark.createDataFrame(group)
         .write.mode("append")

@@ -86,6 +86,31 @@ def test_embedder_keeps_order_and_retries_rate_limits(monkeypatch):
     assert calls["n"] == 4  # 3 batches + 1 retry
 
 
+def test_embedder_abandons_hung_request_and_retries(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    calls = {"n": 0}
+
+    class HangOnceClient:
+        def predict(self, endpoint, inputs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                release.wait(5)  # simulate a request that hangs
+            return {"data": [{"embedding": [1.0]} for _ in inputs["input"]]}
+
+    fake = types.ModuleType("mlflow.deployments")
+    fake.get_deploy_client = lambda target: HangOnceClient()
+    monkeypatch.setitem(sys.modules, "mlflow", types.ModuleType("mlflow"))
+    monkeypatch.setitem(sys.modules, "mlflow.deployments", fake)
+    monkeypatch.setattr(core.time, "sleep", lambda s: None)
+
+    vecs = core.make_databricks_embedder("e", batch_size=8, max_workers=1, request_timeout_s=0.2)(["a", "b"])
+    release.set()
+    assert vecs.shape == (2, 1)
+    assert calls["n"] == 2  # first call timed out, second succeeded
+
+
 def test_judge_parses_json_and_survives_garbage():
     ctx = pd.DataFrame({"chunk_text": ["evidence"]})
     assert core.judge_groundedness("a", ctx, lambda m: 'Sure: {"score": 4, "reason": "ok"}') == (4.0, "ok")
