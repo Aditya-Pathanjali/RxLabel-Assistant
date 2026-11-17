@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+# Regenerate with: python scripts/fetch_openfda_labels.py
+data/

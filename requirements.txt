@@ -1,0 +1,8 @@
+# Local development and tests (Databricks serverless already provides most of these)
+requests
+numpy
+pandas
+scikit-learn
+pytest
+# Databricks-only (installed inside the notebooks / available on serverless):
+# mlflow, databricks-vectorsearch
