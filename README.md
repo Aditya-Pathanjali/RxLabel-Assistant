@@ -45,6 +45,8 @@ question ─► 04 detect drug ─► retrieve chunks for that drug ─► LLM a
 | `rag_setup.py` | Picks the best available embeddings / search / LLM, with fallbacks |
 | `01_ingest_labels.py` … `05_evaluate_mlflow.py` | Databricks notebooks, run in order |
 | `scripts/fetch_openfda_labels.py` | Local download, if Databricks compute has no internet |
+| `scripts/run_from_laptop.py` | Runs 04 + 05 from a laptop against Databricks (SQL warehouse, endpoints, MLflow) |
+| `outputs/` | Evaluation summary, demo answers and judged answers from the latest run |
 | `tests/test_core.py` | Local tests (`python -m pytest -q`) |
 
 ## Run it on Databricks Free Edition (~30–45 minutes)
@@ -79,15 +81,32 @@ question ─► 04 detect drug ─► retrieve chunks for that drug ─► LLM a
 
 ## Results
 
-Fill this in from your MLflow runs (do not copy numbers you did not produce):
+Logged to the Databricks MLflow experiment `rxlabel-assistant-evaluation` (40 in-scope template
+questions + 5 out-of-scope questions; answers by `databricks-meta-llama-3-3-70b-instruct`):
 
-| Run | Hit rate@4 | MRR | Out-of-scope refusal | Groundedness (1–5) | Mean latency |
-|---|---|---|---|---|---|
-| tfidf_baseline | | | | – | – |
-| gte_no_filter | | | | – | – |
-| gte_with_filter | | | | | |
+| Run | Hit rate@4 | MRR | Out-of-scope refusal |
+|---|---|---|---|
+| `tfidf_baseline` (TF-IDF + drug filter) | 0.625 | 0.51 | 5/5 |
+| `gte_no_filter` (gte-large-en) | **0.875** | **0.79** | 0/5 |
+| `gte_with_filter` (gte-large-en + drug filter) | **0.875** | **0.79** | **5/5** |
 
-Local check (TF-IDF, no Databricks): hit rate@4 ≈ 0.6, out-of-scope refusal 5/5.
+- **Dense embeddings** (gte-large-en) found the correct drug section in the top 4 for 35/40
+  questions, versus 25/40 for the TF-IDF baseline, and ranked it higher (MRR 0.79 vs 0.51).
+- **The drug filter** did not change retrieval scores (chunk text already names the drug), but it
+  is what makes the assistant **refuse** questions about drugs outside the database (5/5 vs 0/5).
+- **Answers:** mean end-to-end latency 3.3 s (p95 4.3 s) over 15 judged answers. The LLM judge
+  rated all 15 as fully grounded (5/5); treat this as a sanity check only, since the judge is from
+  the same model family as the generator and was lenient (see Limitations).
+
+Example answers are in [`outputs/demo_answers.json`](outputs/demo_answers.json).
+
+## Running without notebook compute
+
+If Free Edition serverless notebook compute is unavailable, `scripts/run_from_laptop.py` runs
+notebooks 04 and 05 from your machine while still using Databricks for everything else: it reads
+the Delta tables through a SQL warehouse, calls the same model endpoints, and logs to the same
+MLflow experiment. Requires `databricks auth login` and
+`pip install mlflow-skinny databricks-sdk requests numpy pandas scikit-learn`.
 
 ## Limitations
 

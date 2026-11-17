@@ -1,0 +1,70 @@
+[
+  {
+    "question": "Who should not take Eliquis?",
+    "detected_drugs": [
+      "ELIQUIS"
+    ],
+    "answer": "According to [1], ELIQUIS is contraindicated in patients with the following conditions: \n1. Active pathological bleeding \n2. Severe hypersensitivity reaction to ELIQUIS (e.g., anaphylactic reactions) \n3. Severe hypersensitivity to ELIQUIS.",
+    "refused": false,
+    "citations": [
+      "[1] ELIQUIS - Contraindications (0.742)",
+      "[2] ELIQUIS - Warnings and Precautions (0.727)",
+      "[3] ELIQUIS - Use in Specific Populations (0.718)",
+      "[4] ELIQUIS - Boxed Warning (0.716)"
+    ],
+    "latency_s": 16.43
+  },
+  {
+    "question": "What is the recommended starting dose of Revlimid for multiple myeloma?",
+    "detected_drugs": [
+      "REVLIMID"
+    ],
+    "answer": "The recommended starting dose of REVLIMID for multiple myeloma is 25 mg orally once daily on Days 1-21 of repeated 28-day cycles in combination with dexamethasone [1].",
+    "refused": false,
+    "citations": [
+      "[1] REVLIMID - Dosage and Administration (0.890)",
+      "[2] REVLIMID - Dosage and Administration (0.866)",
+      "[3] REVLIMID - Dosage and Administration (0.862)",
+      "[4] REVLIMID - Dosage and Administration (0.841)"
+    ],
+    "latency_s": 12.24
+  },
+  {
+    "question": "Does Opdivo have any serious immune-mediated adverse reactions?",
+    "detected_drugs": [
+      "OPDIVO"
+    ],
+    "answer": "Yes, OPDIVO can cause severe and fatal immune-mediated adverse reactions [3]. Examples include myocarditis, pericarditis, vasculitis, meningitis, encephalitis, myelitis and demyelination, myasthenic syndrome/myasthenia gravis, Guillain-Barre syndrome, uveitis, iritis, and other ocular inflammatory toxicities [2].",
+    "refused": false,
+    "citations": [
+      "[1] OPDIVO - Adverse Reactions (0.856)",
+      "[2] OPDIVO - Warnings and Precautions (0.855)",
+      "[3] OPDIVO - Warnings and Precautions (0.854)",
+      "[4] OPDIVO - Adverse Reactions (0.850)"
+    ],
+    "latency_s": 13.14
+  },
+  {
+    "question": "Which drugs interact with clopidogrel?",
+    "detected_drugs": [
+      "PLAVIX"
+    ],
+    "answer": "According to the excerpts, the following drugs interact with clopidogrel: \n- CYP2C19 inducers (e.g., rifampin) [1]\n- Opioids [1], [3]\n- Nonsteroidal anti-inflammatory drugs (NSAIDs) [1], [3]\n- Warfarin [1], [3]\n- Selective serotonin and serotonin norepinephrine reuptake inhibitors (SSRIs, SNRIs) [1], [2]\n- Other Antiplatelet Agents [1], [2]\n- Repaglinide (CYP2C8 substrates) [1], [2]\n- Omeprazole or Esomeprazole (CYP2C19 inhibitors) [1], [2], [3], [4]\n- Dexlansoprazole, lansoprazole, and pantoprazole [3]",
+    "refused": false,
+    "citations": [
+      "[1] PLAVIX - Drug Interactions (0.829)",
+      "[2] PLAVIX - Drug Interactions (0.805)",
+      "[3] PLAVIX - Drug Interactions (0.789)",
+      "[4] PLAVIX - Warnings and Precautions (0.783)"
+    ],
+    "latency_s": 18.05
+  },
+  {
+    "question": "What is the dose of amoxicillin for adults?",
+    "detected_drugs": [],
+    "answer": "I can only answer questions about the drugs in this label database, and I could not find one of them in your question.",
+    "refused": true,
+    "citations": [],
+    "latency_s": 0.0
+  }
+]

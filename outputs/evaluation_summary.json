@@ -1,0 +1,35 @@
+{
+  "retrieval_mode": "gte",
+  "chat_endpoint": "databricks-meta-llama-3-3-70b-instruct",
+  "n_in_scope": 40,
+  "n_out_of_scope": 5,
+  "retrieval_runs": [
+    {
+      "run": "tfidf_baseline",
+      "hit_rate_at_4": 0.625,
+      "mrr": 0.5125,
+      "in_scope_answer_rate": 1.0,
+      "out_of_scope_refusal_rate": 1.0
+    },
+    {
+      "run": "gte_no_filter",
+      "hit_rate_at_4": 0.875,
+      "mrr": 0.7895833333333334,
+      "in_scope_answer_rate": 1.0,
+      "out_of_scope_refusal_rate": 0.0
+    },
+    {
+      "run": "gte_with_filter",
+      "hit_rate_at_4": 0.875,
+      "mrr": 0.7895833333333334,
+      "in_scope_answer_rate": 1.0,
+      "out_of_scope_refusal_rate": 1.0
+    }
+  ],
+  "answer_metrics": {
+    "mean_groundedness": 5.0,
+    "share_groundedness_4_plus": 1.0,
+    "mean_latency_s": 3.344666666666667,
+    "p95_latency_s": 4.325999999999999
+  }
+}
