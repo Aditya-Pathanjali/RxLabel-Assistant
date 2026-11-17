@@ -410,17 +410,40 @@ def build_messages(question: str, contexts: pd.DataFrame) -> list[dict]:
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
 
 
-def make_databricks_chat(endpoint: str, max_tokens: int = 400, temperature: float = 0.0) -> ChatFn:
+def make_databricks_chat(endpoint: str, max_tokens: int = 400, temperature: float = 0.0,
+                         request_timeout_s: float | None = 90, max_retries: int = 4) -> ChatFn:
+    """Chat completions from a Databricks endpoint, with a hard timeout and logged retries."""
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeout
+
     from mlflow.deployments import get_deploy_client
 
     client = get_deploy_client("databricks")
+    inputs_base = {"max_tokens": max_tokens, "temperature": temperature}
+
+    def predict(messages: list[dict]) -> dict:
+        kwargs = {"endpoint": endpoint, "inputs": {**inputs_base, "messages": messages}}
+        if request_timeout_s is None:
+            return client.predict(**kwargs)
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            return pool.submit(client.predict, **kwargs).result(timeout=request_timeout_s)
+        except FutureTimeout:
+            raise RuntimeError(f"Request timed out after {request_timeout_s:.0f}s") from None
+        finally:
+            pool.shutdown(wait=False)
 
     def chat(messages: list[dict]) -> str:
-        resp = client.predict(
-            endpoint=endpoint,
-            inputs={"messages": messages, "max_tokens": max_tokens, "temperature": temperature},
-        )
-        return resp["choices"][0]["message"]["content"].strip()
+        for attempt in range(max_retries):
+            try:
+                return predict(messages)["choices"][0]["message"]["content"].strip()
+            except Exception as exc:
+                if attempt == max_retries - 1 or not _is_retryable(exc):
+                    raise
+                wait = min(60, 5 * 2 ** attempt)
+                print(f"    chat endpoint busy ({str(exc)[:80]}), retrying in {wait}s", flush=True)
+                time.sleep(wait)
+        return ""
 
     return chat
 

@@ -8,7 +8,16 @@ Picks the best option available in the workspace and falls back gracefully:
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
+
+# Free Edition endpoints can hang; cap MLflow's own timeouts (default total: 10 minutes)
+# and disable its silent retries; drug_rag_core retries with visible logging instead.
+os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "0")
+os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "60")
+os.environ.setdefault("MLFLOW_DEPLOYMENT_PREDICT_TIMEOUT", "60")
+os.environ.setdefault("MLFLOW_DEPLOYMENT_PREDICT_TOTAL_TIMEOUT", "90")
 
 import config as cfg
 import drug_rag_core as core

@@ -111,6 +111,30 @@ def test_embedder_abandons_hung_request_and_retries(monkeypatch):
     assert calls["n"] == 2  # first call timed out, second succeeded
 
 
+def test_chat_retries_after_timeout(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    calls = {"n": 0}
+
+    class HangOnceClient:
+        def predict(self, endpoint, inputs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                release.wait(5)
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    fake = types.ModuleType("mlflow.deployments")
+    fake.get_deploy_client = lambda target: HangOnceClient()
+    monkeypatch.setitem(sys.modules, "mlflow", types.ModuleType("mlflow"))
+    monkeypatch.setitem(sys.modules, "mlflow.deployments", fake)
+    monkeypatch.setattr(core.time, "sleep", lambda s: None)
+
+    assert core.make_databricks_chat("c", request_timeout_s=0.2)([{"role": "user", "content": "hi"}]) == "ok"
+    release.set()
+    assert calls["n"] == 2
+
+
 def test_judge_parses_json_and_survives_garbage():
     ctx = pd.DataFrame({"chunk_text": ["evidence"]})
     assert core.judge_groundedness("a", ctx, lambda m: 'Sure: {"score": 4, "reason": "ok"}') == (4.0, "ok")
